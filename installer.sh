@@ -149,7 +149,42 @@ def blocked_hint(url):
             print("      'Local x86-64 installer ISO' instead of a download entry.")
             return
 
+def verified_proxmox(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(2**20), b""):
+            digest.update(block)
+    return digest.hexdigest() == PVE_HASH
+
+def proxmox_image():
+    filename = PVE.rsplit("/", 1)[1]
+    cached = IMAGES / filename
+    for image in (cached, Path.home() / filename):
+        if image.is_file():
+            print(f"Verifying {image} ...", flush=True)
+            if verified_proxmox(image):
+                return image
+            print("Checksum mismatch; fetching a verified copy.")
+    sources = (PVE, "https://enterprise.proxmox.com/iso/" + filename)
+    with tempfile.TemporaryDirectory(dir=IMAGES) as tmp:
+        part = Path(tmp) / filename
+        for url in sources:
+            print(f"Downloading Proxmox from {url}", flush=True)
+            try:
+                download(url, part)
+            except sp.CalledProcessError as exc:
+                print(f"Download failed (curl {exc.returncode}).")
+                continue
+            if verified_proxmox(part):
+                part.replace(cached)
+                print("Proxmox ISO verified.")
+                return cached
+            print("Download failed checksum verification.")
+    raise ValueError("No verified ISO available. Check outbound HTTPS access to the official Proxmox servers.")
+
 def media(url):
+    if url == PVE:
+        return proxmox_image()
     if not url:
         path = Path(input("Full path to installer ISO on this host > ").strip()).expanduser().resolve()
         if not path.is_file() or path.suffix.lower() != ".iso":
@@ -166,14 +201,11 @@ def media(url):
         except sp.CalledProcessError:
             raise ValueError(f"Download failed: {url}\nEgress is filtered here. Upload the ISO "
                              "with the Daytona UI/CLI, then choose the local ISO entry.")
-        if url == PVE:
-            expected = PVE_HASH
-        else:
-            sums = Path(tmp) / "checksums"
-            manifest = "SHA512SUMS" if "debian.org" in url else "SHA256SUMS"
-            download(url.rsplit("/", 1)[0] + "/" + manifest, sums)
-            expected = next((line.split()[0] for line in sums.read_text().splitlines()
-                             if len(line.split()) == 2 and line.split()[1].lstrip("*").removeprefix("./") == dest.name), "")
+        sums = Path(tmp) / "checksums"
+        manifest = "SHA512SUMS" if "debian.org" in url else "SHA256SUMS"
+        download(url.rsplit("/", 1)[0] + "/" + manifest, sums)
+        expected = next((line.split()[0] for line in sums.read_text().splitlines()
+                         if len(line.split()) == 2 and line.split()[1].lstrip("*").removeprefix("./") == dest.name), "")
         if len(expected) not in (64, 128):
             raise ValueError("No matching publisher checksum.")
         digest = hashlib.new("sha256" if len(expected) == 64 else "sha512")
@@ -377,14 +409,12 @@ def quick():
         print("After the reboot: menu 2 → s, the web UI URL prints itself.")
 
 def create_proxmox():
-    """Proxmox preset: local ISO only, small disk, public console on boot."""
-    print("Proxmox VE preset — offline ISO install, no egress needed.")
+    print("Proxmox VE preset — automatic ISO download and SHA-256 verification.")
     print("Enter accepts every default.")
     name = input("Machine name > ").strip()
     label = "Proxmox VE 9.2"
-    ram, cpu, size = specs(label, local_iso=True)
-    src = media(None)
-    build(name, label, ram, cpu, size, src=src)
+    ram, cpu, size = specs(label)
+    build(name, label, ram, cpu, size)
     vm = VMS / name
     publish(vm, console_port(vm), "installer console")
     print("\nInstall with: ext4, hostname pve.local, IP 10.0.2.15/24,")
@@ -750,7 +780,7 @@ def menu():
     two_col("  ├ [1] VPS", "  ├ [5] Themes")
     two_col("  ├ [2] Panel", "  ├ [6] System")
     two_col("  ├ [3] Wings", "  ├ [7] Container")
-    line("  └ [8] New Module")
+    line("  └ [8] Install Proxmox")
     line("")
     rule("MAINTENANCE & TOOLS")
     two_col("  ├ [4] Cloudflare", "  ├ [9] SSL Panel")
