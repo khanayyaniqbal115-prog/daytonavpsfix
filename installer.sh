@@ -762,32 +762,34 @@ def main():
     os.umask(0o077)
     for directory in (ROOT, VMS, IMAGES):
         directory.mkdir(parents=True, exist_ok=True)
-    with (ROOT / "console.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        while True:
-            menu()
-            try:
-                choice = input().strip()
-                if choice == "0":
-                    print("\n  System left running. Bye.")
-                    break
-                action = {"1":create, "2":manage, "3":quick, "4":tunnel, "5":expose,
-                          "6":network, "7":dependencies, "8":create_proxmox,
-                          "9":ssl_panel}.get(choice)
-                if action:
-                    print()
+    while True:
+        menu()
+        try:
+            choice = input().strip()
+            if choice == "0":
+                print("\n  System left running. Bye.")
+                break
+            action = {"1":create, "2":manage, "3":quick, "4":tunnel, "5":expose,
+                      "6":network, "7":dependencies, "8":create_proxmox,
+                      "9":ssl_panel}.get(choice)
+            if action:
+                print()
+                with (ROOT / "console.lock").open("a") as lock:
+                    try:
+                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        print("Another tab holds the action lock. Finish its task or exit its old menu with 0.")
+                        continue
                     action()
-            except (ValueError, OSError, sp.CalledProcessError) as exc:
-                print("\n  Action stopped:", exc)
-            except KeyboardInterrupt:
-                print("\n  Cancelled.")
+        except (ValueError, OSError, sp.CalledProcessError) as exc:
+            print("\n  Action stopped:", exc)
+        except KeyboardInterrupt:
+            print("\n  Cancelled.")
 if __name__ == "__main__":
     try:
         main()
     except (EOFError, KeyboardInterrupt):
         print()
-    except BlockingIOError:
-        sys.exit("Another PhoenixCloud console is open for this user.")
 END_PHOENIX_MENU
 python3 -c 'import pathlib, sys; p = pathlib.Path(sys.argv[1]); compile(p.read_bytes(), str(p), "exec")' "$temp_launcher"
 chmod 755 "$temp_launcher"
@@ -795,4 +797,6 @@ mv -fT -- "$temp_launcher" "$install_dir/phoenixcloud"
 echo "Installed. Open the menu anytime with: ~/.local/bin/phoenixcloud"
 if [[ -t 0 ]]; then
     exec "$install_dir/phoenixcloud"
+elif ( : </dev/tty ) 2>/dev/null; then
+    exec "$install_dir/phoenixcloud" </dev/tty
 fi
